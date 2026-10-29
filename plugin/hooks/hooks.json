@@ -1,0 +1,56 @@
+{
+  "description": "Hours: hand transcript collection to a detached background process at session start and end, and report each turn's live fingerprint (hashes only).",
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/usr/bin/python3",
+            "args": [
+              "-I",
+              "-B",
+              "${CLAUDE_PLUGIN_ROOT}/scripts/hook_launch.py",
+              "SessionStart"
+            ],
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/usr/bin/python3",
+            "args": [
+              "-I",
+              "-B",
+              "${CLAUDE_PLUGIN_ROOT}/scripts/hook_launch.py",
+              "SessionEnd"
+            ]
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/usr/bin/python3",
+            "args": [
+              "-I",
+              "-B",
+              "${CLAUDE_PLUGIN_ROOT}/scripts/hook_launch.py",
+              "Stop"
+            ],
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}

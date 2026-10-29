@@ -1,0 +1,28 @@
+{
+  "name": "hours",
+  "version": "0.6.0",
+  "description": "Connects Claude Code to your Hours account. It also finds Codex, Gemini CLI, Antigravity and Copilot CLI sessions on this computer. It removes secrets and personal data on this computer and sends only the cleaned copy for skill scoring: once when the Hours install line runs, then at each Claude Code session start and end.",
+  "author": {
+    "name": "Hours"
+  },
+  "userConfig": {
+    "endpoint": {
+      "type": "string",
+      "title": "Hours site",
+      "description": "Set by the Hours install line. It must match the site this computer is paired with, or nothing is sent.",
+      "default": ""
+    },
+    "pair_code": {
+      "type": "string",
+      "title": "Pairing code",
+      "description": "Set by the Hours install line. Works once.",
+      "default": ""
+    },
+    "clock_start": {
+      "type": "string",
+      "title": "Install time",
+      "description": "Set by the Hours install line: when it was run (Unix seconds), for the time-to-score measure.",
+      "default": ""
+    }
+  }
+}
