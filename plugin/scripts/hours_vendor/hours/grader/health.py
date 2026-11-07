@@ -63,6 +63,13 @@ def drop_units(units: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], Dict[
     units = [u for u in units if isinstance(u, dict)]
     gone_eps: Set[Tuple[str, int]] = set()
     gone_hi: Dict[str, Set[int]] = {}
+    memo: Dict[Tuple[Any, str], bool] = {}
+    def flagged(r: Any) -> bool:
+        k = (_get(r, "label"), _get(r, "text") or "")
+        v = memo.get(k)
+        if v is None:
+            v = memo[k] = turn_flagged(r)
+        return v
     while True:
         changed = False
         for u in units:
@@ -70,14 +77,14 @@ def drop_units(units: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], Dict[
             his = gone_hi.setdefault(sid, set())
             if _is_window(u):
                 for r in u.get("rturns") or []:
-                    if turn_flagged(r) and _hi(r) not in his:
+                    if flagged(r) and _hi(r) not in his:
                         his.add(_hi(r))
                         changed = True
                 continue
             key = (sid, int(u.get("episode_index") or 0))
             if key in gone_eps:
                 continue
-            if unit_flagged(u) or any(_hi(r) in his for r in u.get("rturns") or []):
+            if any(flagged(r) for r in (u.get("rturns") or [])) or any(_hi(r) in his for r in u.get("rturns") or []):
                 gone_eps.add(key)
                 changed = True
         for u in units:

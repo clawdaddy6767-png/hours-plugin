@@ -83,7 +83,8 @@ PROGRESS_TIMEOUT = 10.0
 RETRIES = 3
 OUTAGE_SECONDS = 600.0
 MAX_BACKOFF = 30.0
-UPLOAD_THREADS = 2
+UPLOAD_THREADS = 4
+BUNDLE_TIMEOUT = 300.0
 STOP_FILE = "stop_request"
 PROGRESS_MIN_INTERVAL = 1.0
 MAX_REPLY_BYTES = 1_000_000
@@ -1183,7 +1184,8 @@ class Server:
                                "raw_bytes_done": int(raw_bytes_done), "bundle_bytes_total": int(bundle_bytes_total)}),
                    retries=0, timeout=PROGRESS_TIMEOUT)
     def bundle(self, batch_id: str, gz_body: bytes) -> None:
-        self._send("POST", self.url("/api/v1/bundles"), gz_body, {"X-Hours-Batch": batch_id}, gz=True, outage=True)
+        self._send("POST", self.url("/api/v1/bundles"), gz_body, {"X-Hours-Batch": batch_id}, gz=True, outage=True,
+                   timeout=max(BUNDLE_TIMEOUT, FIRST_REQUEST_TIMEOUT))
     def complete(self, batch_id: str) -> None:
         self._send("POST", self.url("/api/v1/batches/%s/complete" % batch_id), _json_body({}), outage=True)
     def witness(self, body: Dict[str, Any]) -> None:
