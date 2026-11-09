@@ -61,7 +61,7 @@ SOURCE_TABLE: List[SourceInfo] = [
                "Scan of ~/.qwen/projects/*/chats by every Hours plugin (Qwen Code has no Python hook)"),
     SourceInfo("zed", "Zed Industries", "Zed", "transcript",
                "Scan of Zed's threads.db (agent threads) by every Hours plugin"),
-    SourceInfo("claude_cowork", "Anthropic", "Claude Desktop (Cowork)", "transcript",
+    SourceInfo("claude_cowork", "Anthropic", "Claude Cowork", "transcript",
                "Scan of Claude Desktop's local-agent-mode-sessions by every Hours plugin"),
 ]
 BY_SOURCE = {s.source: s for s in SOURCE_TABLE}
@@ -117,6 +117,8 @@ def sniff_json(head: bytes) -> Optional[str]:
         if re.search(r'"header"\s*:\s*"Gemini', text):
             return "gemini_app"
         return None
+    if isinstance(obj.get("data_files"), list) and "total_files" in obj:
+        return "claude_manifest"
     if isinstance(obj.get("conversations"), list) and obj["conversations"]:
         obj = obj["conversations"][0] if isinstance(obj["conversations"][0], dict) else obj
     if chatgpt_export.looks_like_chatgpt(obj):

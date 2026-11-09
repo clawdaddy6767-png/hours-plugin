@@ -5,7 +5,7 @@ from ..model import Session
 from . import aider, claude_cowork, cline, continue_dev, goose, qwen_code, roo_code, zed
 TOOLS = ("aider", "cline", "roo_code", "continue_dev", "goose", "qwen_code", "zed", "claude_cowork")
 LABELS = {"aider": "Aider", "cline": "Cline", "roo_code": "Roo Code", "continue_dev": "Continue", "goose": "Goose",
-          "qwen_code": "Qwen Code", "zed": "Zed", "claude_cowork": "Claude Desktop (Cowork)"}
+          "qwen_code": "Qwen Code", "zed": "Zed", "claude_cowork": "Claude Cowork"}
 PLUGIN_NAMES = {"aider": "hours-aider", "cline": "hours-cline", "roo_code": "hours-roo-code",
                 "continue_dev": "hours-continue", "goose": "hours-goose", "qwen_code": "hours-qwen-code",
                 "zed": "hours-zed", "claude_cowork": "hours-claude-cowork"}
