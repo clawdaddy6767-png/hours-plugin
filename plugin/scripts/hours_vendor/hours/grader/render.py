@@ -451,6 +451,8 @@ class _Rendered:
         self.first_human = humans[0].id if humans else None
         self.last_human = humans[-1].id if humans else None
         self.scrub = self.levels["L0"][1].scrub_prose
+        self.instructions: Optional[List[Dict[str, Any]]] = None
+        self.early: List[str] = []
     def raw_for(self, rids: set) -> List[Turn]:
         return [t for t in self.main if self.id_map.get(t.id) in rids]
     def metrics(self, rturns: List[RTurn], raw: List[Turn]) -> Dict[str, Any]:
@@ -458,6 +460,113 @@ class _Rendered:
         m = detectors.compute(raw, self.id_map, self.session, self.scrub, self.secret_by_turn,
                               is_session_start=self.first_human in ids, is_session_end=self.last_human in ids)
         return _final_tree(m, self.levels["L0"][1])
+_SCOPE_NAMES = {"user": "user", "project": "project", "automem": "auto-memory", "local": "local",
+                "managed": "managed", "enterprise": "managed"}
+_RULE_LINE = re.compile(r"\b(always|never|must|don'?t|do not|ask (?:first|before)|before|only|use|run|check|verify|"
+                        r"test|read|update|record|keep|prefer|avoid|should)\b", re.I)
+_RULE_KINDS = (
+    ("verification", re.compile(r"\b(tests?|pytest|verif\w*|check\w*|confirm\w*|spot-check\w*|validat\w*|"
+                                r"double-check\w*)\b", re.I)),
+    ("memory", re.compile(r"\b(memory|progress|next\.md|decisions?|learnings?|notes?|handoffs?|"
+                          r"start of (?:every|each) session|re-read|index)\b", re.I)),
+    ("safety", re.compile(r"\b(secrets?|credentials?|passwords?|tokens?|api keys?|deploy\w*|delet\w*|production|"
+                          r"force|permissions?|privacy|scrub\w*)\b", re.I)),
+    ("model", re.compile(r"\b(haiku|sonnet|opus|fable|model|effort)\b", re.I)),
+    ("tools", re.compile(r"\b(search|look up|research|commands?|scripts?|tools?|cli|skills?|agents?|subagents?)\b",
+                         re.I)),
+)
+RULES_PER_KIND = 2
+RULES_MAX = 10
+RULE_CHARS = 180
+EARLY_READ_RE = re.compile(r"(progress|next|notes?|to[-_]?do|spec|plan|handoff|memory|decisions|learnings|status|"
+                           r"start_here|changelog|readme)", re.I)
+def _scope_name(t: str) -> str:
+    k = (t or "").lower().replace("_", "").replace("-", "").replace(" ", "")
+    return _SCOPE_NAMES.get(k, k or "unknown")
+def _file_label(path: str) -> str:
+    p = (path or "").replace("\\", "/").rstrip("/")
+    return p.rsplit("/", 1)[-1] if p else "instructions"
+def instruction_rules(content: str, scrub: Any) -> List[Dict[str, str]]:
+    picked: List[Dict[str, str]] = []
+    per: Dict[str, int] = {}
+    fence = False
+    for raw in (content or "").splitlines():
+        line = raw.strip()
+        if line.startswith("```"):
+            fence = not fence
+            continue
+        if fence or not line or line.startswith(("#", "|", ">")) or len(line) < 20:
+            continue
+        line = re.sub(r"^(?:[-*+]|\d+[.)])\s+", "", line).replace("**", "")
+        if not _RULE_LINE.search(line):
+            continue
+        for kind, rx in _RULE_KINDS:
+            if rx.search(line) and per.get(kind, 0) < RULES_PER_KIND:
+                text = scrub(line) or ""
+                if len(text) > RULE_CHARS:
+                    text = cut_head(text, RULE_CHARS)
+                picked.append({"kind": kind, "text": text})
+                per[kind] = per.get(kind, 0) + 1
+                break
+        if len(picked) >= RULES_MAX:
+            break
+    return picked
+def instruction_loads(session: Session, scrub: Any) -> List[Dict[str, Any]]:
+    from hours.model import parse_ts
+    out = []
+    for ld in (session.metadata or {}).get("instruction_loads") or []:
+        files = []
+        for f in ld.get("files") or []:
+            content = f.get("content") or ""
+            files.append({"file": _file_label(f.get("path") or ""), "scope": _scope_name(f.get("type") or ""),
+                          "lines": content.count("\n") + 1 if content else 0,
+                          "rules": instruction_rules(content, scrub)})
+        out.append({"ts": parse_ts(ld.get("ts")), "reason": ld.get("reason") or "update",
+                    "changed": bool(ld.get("changed")), "files": files})
+    return out
+def unit_instructions(loads: List[Dict[str, Any]], until: Optional[datetime]) -> List[Dict[str, Any]]:
+    by: Dict[Tuple[str, str], Dict[str, Any]] = {}
+    for ld in loads:
+        if until is not None and ld["ts"] is not None and ld["ts"] > until:
+            continue
+        for f in ld["files"]:
+            key = (f["file"], f["scope"])
+            rec = by.setdefault(key, {"file": f["file"], "scope": f["scope"], "loaded": [],
+                                      "changed_in_session": False})
+            rec["lines"] = f["lines"]
+            rec["rules"] = f["rules"]
+            reason = str(ld["reason"])
+            if reason not in rec["loaded"]:
+                rec["loaded"].append(reason)
+            if ld["changed"]:
+                rec["changed_in_session"] = True
+    out, left = [], RULES_MAX
+    for rec in by.values():
+        rec = dict(rec, rules=rec["rules"][:max(left, 0)])
+        left -= len(rec["rules"])
+        out.append(rec)
+    return out
+def early_reads(rd: "_Rendered") -> List[str]:
+    calls = [t for t in rd.main if t.kind == "tool_call" and t.tool][:3]
+    out: List[str] = []
+    for t in calls:
+        if t.tool.name.lower() not in ("read", "view", "notebookread"):
+            continue
+        name = _file_label(t.tool.input_summary or "")
+        if name and EARLY_READ_RE.search(name) and name not in out:
+            out.append(rd.scrub(name) or name)
+    return out
+def _attach_context(rd: "_Rendered", units: List["Unit"]) -> None:
+    from hours.model import parse_ts
+    if rd.instructions is None:
+        rd.instructions = instruction_loads(rd.session, rd.scrub)
+        rd.early = early_reads(rd)
+    for u in units:
+        m36 = unit_instructions(rd.instructions, parse_ts(u.ended)) if rd.instructions else []
+        if m36:
+            u.metrics["M36_instructions"] = _final_tree(m36, rd.levels["L0"][1])
+        if rd.early:
+            u.metrics["M37_early_reads"] = list(rd.early)
 def build_units(session: Session, surface: str = "claude_code") -> List[Unit]:
     rd = _Rendered(session)
     return _build_segments(rd, surface)
@@ -497,6 +606,7 @@ def _build_segments(rd: _Rendered, surface: str) -> List[Unit]:
                         started=_iso(min(stamps)) if stamps else _iso(session.started_at),
                         ended=_iso(max(stamps)) if stamps else _iso(session.ended_at), project_key=pkey)
             units.append(unit)
+    _attach_context(rd, units)
     return units
 def _window(rts: List[RTurn], max_tokens: int) -> List[List[RTurn]]:
     out: List[List[RTurn]] = []
@@ -609,6 +719,7 @@ def build_windows(session: Session, surface: str = "claude_code", rendered: Opti
         out.append(Unit(f"{session.id[:8]}-w{k}", session.id, surface, k, 0, dig, "L1", facts, kind="window",
                         metrics=rd.metrics(dig, wturns), started=_iso(min(stamps)) if stamps else None,
                         ended=_iso(max(stamps)) if stamps else None, project_key=pkey))
+    _attach_context(rd, out)
     return out
 SURFACES = ("claude_code", "claude_ai", "chatgpt", "codex", "gemini_app", "gemini_cli", "antigravity",
             "copilot_consumer", "copilot_cli", "cursor", "opencode", "pi", "hermes", "openclaw",

@@ -503,6 +503,16 @@ class _FileParser:
             self.meta.setdefault("invoked_skills", Counter()).update(names)
         elif atype == "hook_additional_context":
             self.counts["hook_additional_context"] += 1
+        elif atype == "instructions" and target is self.session:
+            files = []
+            for f in a.get("files") or []:
+                if isinstance(f, dict) and isinstance(f.get("content"), str):
+                    files.append({"path": str(f.get("path") or ""), "type": str(f.get("type") or ""),
+                                  "content": f["content"]})
+            if files:
+                self.meta.setdefault("instruction_loads", []).append(
+                    {"ts": rec.get("timestamp"), "reason": a.get("reason"), "changed": bool(a.get("changed")),
+                     "files": files})
     def _on_system(self, rec: Dict[str, Any]) -> None:
         sub = rec.get("subtype")
         target = self._target(rec)

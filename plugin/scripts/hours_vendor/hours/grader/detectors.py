@@ -119,6 +119,76 @@ def _shell_cmd(t: Turn) -> Optional[str]:
     if t.tool and t.tool.category == "shell":
         return t.tool.input_summary or ""
     return None
+LOOP_MIN = 3
+_ENV_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=\S*$")
+_WRAPPERS = {"sudo", "timeout", "env", "nohup", "time", "exec", "command"}
+def call_family(t: Turn) -> str:
+    name = t.tool.name if t.tool else "tool"
+    if _is_edit(t):
+        return f"{name.lower()}:{basename(t.tool.input_summary or '')}"
+    cmd = _shell_cmd(t)
+    if cmd is None:
+        return name.lower()
+    part = re.split(r"\s*(?:&&|;|\|\|)\s*", cmd.strip())
+    part = [p for p in part if p and not re.match(r"^(cd|export|source|\.)\b", p)] or part
+    words = [w for w in re.split(r"\s+", part[0] if part else "") if w]
+    while words and (_ENV_RE.match(words[0]) or words[0] in _WRAPPERS or re.match(r"^\d+[smh]?$", words[0])):
+        words = words[1:]
+    head = [w for w in words[1:] if not w.startswith("-")][:1]
+    if words and words[0].endswith(("python", "python3")) and "-m" in words[1:3]:
+        i = words.index("-m")
+        head = ["-m"] + words[i + 1:i + 2]
+    return "shell:" + " ".join([basename(words[0]) if words else ""] + head).lower()
+def _poll_target(cmd: Optional[str]) -> Optional[str]:
+    if cmd is None:
+        return None
+    m_ = re.match(r"^\s*ssh\s+(?:-\S+(?:\s+(?!-)\S+)?\s+)*\S+\s+(.*)$", cmd.strip(), re.S)
+    return m_.group(1).strip().strip("'\"") if m_ else cmd
+def fail_loops(calls: List[Turn], ctx: "_Ctx", humans: List[Turn], order: Dict[str, int],
+               m09_starts: set) -> List[Dict[str, Any]]:
+    fam_fails: Dict[str, List[Turn]] = {}
+    loops: List[Tuple[str, List[Turn]]] = []
+    def close(f: str) -> None:
+        run_ = fam_fails.pop(f, [])
+        if len(run_) >= LOOP_MIN and ctx.rid(run_[0]) not in m09_starts:
+            loops.append((f, run_))
+    hum_ids = {h.id for h in humans}
+    seen_user: Dict[str, bool] = {}
+    events = sorted([(order[t.id], t) for t in calls if t.id in order] + [(order[h.id], h) for h in humans],
+                    key=lambda x: x[0])
+    for _i, t in events:
+        if t.id in hum_ids:
+            for f in fam_fails:
+                seen_user[f] = True
+            continue
+        if _is_read(t):
+            continue
+        cmd = _poll_target(_shell_cmd(t))
+        if cmd is not None and (POLL_RE.search(cmd) or READONLY_RE.search(cmd)):
+            continue
+        out = ctx.outcome(t)
+        f = call_family(t)
+        if out == "fail":
+            fam_fails.setdefault(f, []).append(t)
+        elif out == "ok" and f in fam_fails:
+            if seen_user.pop(f, False):
+                close(f)
+            else:
+                fam_fails.pop(f)
+    for f in list(fam_fails):
+        close(f)
+    res = []
+    hidx = sorted((order[h.id], h) for h in humans)
+    for f, run_ in loops:
+        a, b = order[run_[0].id], order[run_[-1].id]
+        after = next((h for i, h in hidx if i > b), None)
+        inside = any(a < i < b for i, _h in hidx)
+        if after is None and not inside:
+            continue
+        res.append({"turns": [ctx.rid(run_[0]), ctx.rid(run_[-1])], "family": f.split(" ")[0],
+                    "repeats": len(run_), "user_turn_after": ctx.rid(after) if after is not None else None,
+                    "user_turn_inside": inside})
+    return res
 def compute(turns: List[Turn], id_of: Dict[str, str], session: Session,
             scrub: Callable[[Optional[str]], Optional[str]], secret_by_turn: Dict[str, Dict[str, int]],
             is_session_start: bool = False, is_session_end: bool = False) -> Dict[str, Any]:
@@ -311,6 +381,7 @@ def compute(turns: List[Turn], id_of: Dict[str, str], session: Session,
                                       "user_turn_after": after})
     m["fail_signatures"] = sorted({_sig(t.tool.name, t.tool.input_summary or "") for t in calls
                                    if ctx.outcome(t) == "fail" and not _is_read(t)})
+    m["M09_fail_loops"] = fail_loops(calls, ctx, humans, order, {ts[0] for _s, _n, ts in streaks})
     changes = []
     last_model = None
     mains = [t for t in turns if not t.is_sidechain]
