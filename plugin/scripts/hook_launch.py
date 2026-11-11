@@ -31,7 +31,7 @@ def main(argv):
     sid = _first(payload, "session_id", "sessionId", "conversationId", "conversation_id")
     tpath = _first(payload, "transcript_path", "transcriptPath")
     detail = _first(payload, "reason", "source", "terminationReason", "stopReason").lower()
-    collector = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hours_collect.py")
+    collector = os.path.join(os.path.dirname(os.path.realpath(__file__)), "hours_collect.py")
     cmd = [sys.executable or "/usr/bin/python3", "-I", "-B", collector, "--hook", event, "--tool", tool]
     if _SID_RE.match(sid):
         cmd += ["--hook-session", sid]

@@ -9,7 +9,7 @@
       "name": "hours",
       "source": "./plugin",
       "description": "Connects Claude Code to your Hours account and sends cleaned copies of your AI coding sessions for skill scoring.",
-      "version": "0.6.2"
+      "version": "0.6.3"
     }
   ]
 }

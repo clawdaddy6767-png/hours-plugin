@@ -2182,7 +2182,12 @@ def cmd_line(args: argparse.Namespace) -> int:
     spawn_pass(ddir)
     print("Hours: cleaning and sending now, in the background. Watch your browser for your score. You can close "
           "this window.")
-    print(STOP_HINT)
+    if args.tool == "claude_code":
+        print(STOP_HINT)
+    try:
+        tool_hooks().add_all(HERE)
+    except Exception:
+        log_exc("tool hooks")
     return 0
 def confirm_device(ddir: str) -> Optional[Dict[str, Any]]:
     dev = load_device(ddir)
@@ -2238,6 +2243,11 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     ap.add_argument("--hook-session")
     ap.add_argument("--hook-transcript")
     ap.add_argument("--hook-detail")
+    ap.add_argument("--add-hooks", action="store_true",
+                    help="add Hours' session start/end hooks to every installed AI tool (Codex, Gemini CLI, Cursor, "
+                         "Copilot CLI, Antigravity)")
+    ap.add_argument("--uninstall", action="store_true",
+                    help="take Hours' hooks out of every AI tool's settings (nothing else is changed)")
     return ap.parse_args(argv)
 def _plural(n: int, one: str, many: str) -> str:
     return one if n == 1 else many
@@ -2279,6 +2289,27 @@ def _report(summary: Dict[str, Any], site: Optional[str]) -> List[str]:
     if site:
         lines.append("Manage your devices at %s/devices" % site)
     return lines
+PASS_FILE = "pass_started"
+COALESCE_HOOKS = ("SessionStart", "Stop")
+def mark_pass_started(ddir: str) -> None:
+    path = os.path.join(ddir, PASS_FILE)
+    try:
+        with open(path, "a"):
+            pass
+        os.utime(path, None)
+    except OSError:
+        pass
+def pass_started_since(ddir: str, since: float) -> bool:
+    try:
+        return os.path.getmtime(os.path.join(ddir, PASS_FILE)) > since
+    except OSError:
+        return False
+def tool_hooks():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("hours_tool_hooks", os.path.join(HERE, "tool_hooks.py"))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
 def stop_throttled(ddir: str) -> bool:
     path = os.path.join(ddir, "last_stop_sweep")
     try:
@@ -2297,6 +2328,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     args = parse_args(argv)
     os.umask(0o077)
     RUNNING_TOOL[0] = args.tool
+    if args.add_hooks or args.uninstall:
+        th = tool_hooks()
+        return th.remove_all() if args.uninstall else th.add_all(HERE)
     if args.line:
         return cmd_line(args)
     ddir = data_dir(args.data_dir, args.tool)
@@ -2353,14 +2387,21 @@ def main(argv: Optional[List[str]] = None) -> int:
             pass
     trigger = args.hook or "manual"
     lock = wait_lock(ddir, 0)
+    waited = False
     if lock is None and (args.hook or talk or args.line_pass):
         log.info("another collector is running; waiting for it")
+        waited = True
         lock = wait_lock(ddir, LOCK_WAIT_SECONDS)
     if lock is None:
         log.info("another collector is running; skipped")
         if args.once:
             print(json.dumps({"error": "another collector run is in progress"}))
         return 0
+    if waited and args.hook in COALESCE_HOOKS and pass_started_since(ddir, _RUN["started"]):
+        log.info("%s %s skipped: a pass that started after it already ran", args.tool, args.hook)
+        release_lock(lock)
+        return 0
+    mark_pass_started(ddir)
     try:
         t0 = time.time()
         summary = run_once(ddir, args, trigger, server, force_batch=force_batch)
